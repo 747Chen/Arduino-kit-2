@@ -15,8 +15,8 @@ const int TempPin = A3;     // LM35 V4 analog output
 const int RelayPin = 13;    // relay input(low trigger)
 
 // NEW: Temp control
-float Tmin = 25.0;
-float Tmax = 30.0;
+float Tmin = 20.0;
+float Tmax = 25.0;
 
 // Define the data from the current sensor
 const int Rshunt = 33.3;                // Resistance of the transformer: Model 50 A: 20 ohms, Model 30 A: 33.3 ohms
