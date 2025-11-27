@@ -9,15 +9,12 @@ time.sleep(2)  # wait for Arduino to initialize
 try:
     while True:
         current_time = datetime.now()
-
         if current_time.second % 30 < 15:
             command = 'H'
         else:
             command = 'L'
-
         ser.write(command.encode())
         print(f"Send command: {command} at {current_time.strftime('%H:%M:%S')}")
-
         time.sleep(1)
 
 except KeyboardInterrupt:
