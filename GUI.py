@@ -8,6 +8,7 @@ import time
 import serial
 import threading
 import queue
+import regex as re
 
 # 页面配置
 st.set_page_config(
@@ -162,13 +163,40 @@ def read_from_esp32_simulation():
 
 
 # 真正的ESP32数据读取函数
-def read_from_esp32_serial(port='COM3', baudrate=115200):
+def read_from_esp32_serial(port, baudrate):
     """
     从ESP32串口读取真实数据
-    替换这个函数为你的实际读取代码
+    解析格式:  Temp: 8.86 °C | Irms: 0.00000
     """
     try:
-        return read_from_esp32_simulation()
+        if 'serial_conn' not in st.session_state:
+            st.session_state.serial_conn = serial.Serial(port, baudrate, timeout=1)
+            time.sleep(2)  # 等待Arduino初始化
+
+        ser = st.session_state.serial_conn
+
+        if ser.in_waiting > 0:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+
+            if not line:
+                return None
+
+            # 使用正则提取所有数字，包括浮点数
+            numbers = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", line)
+
+            if len(numbers) >= 2:
+                temp_val = float(numbers[0])
+                irms_val = float(numbers[1])
+
+                return {
+                    "temperature": temp_val,
+                    "current": irms_val,
+                    "timestamp": datetime.now(),
+                    "source": "serial"
+                }
+
+        return None
+
     except Exception as e:
         print(f"Serial Read Error: {e}")
         return None
@@ -365,7 +393,7 @@ time_diff = (current_time - st.session_state.last_update).total_seconds()
 
 if time_diff >= 2:
     if st.session_state.serial_connected:
-        new_data = read_from_esp32_simulation()
+        new_data = read_from_esp32_serial(port=com_port, baudrate=baud_rate)
     else:
         new_data = read_from_esp32_simulation()
 
@@ -380,8 +408,6 @@ if time_diff >= 2:
             st.session_state.timestamps.pop(0)
 
         st.session_state.last_update = current_time
-
-        st.rerun()
 
 # 底部状态栏
 st.markdown("---")
