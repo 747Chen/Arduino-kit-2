@@ -38,7 +38,7 @@ UniversalTelegramBot bot(BOTtoken, client);
 int botRequestDelay = 1000;
 unsigned long lastTimeBotRan;
 
-const int ledPin = 2;
+const int ledPin = 9;
 bool ledState = LOW;
 
 // Handle what happens when you receive new messages
