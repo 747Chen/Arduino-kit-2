@@ -41,6 +41,9 @@ unsigned long lastTimeBotRan;
 const int ledPin = 9;
 bool ledState = LOW;
 
+const int relayPin = 13;
+bool relayState = LOW;
+
 // Handle what happens when you receive new messages
 void handleNewMessages(int numNewMessages) {
   Serial.println("handleNewMessages");
@@ -63,9 +66,11 @@ void handleNewMessages(int numNewMessages) {
     if (text == "/start") {
       String welcome = "Welcome, " + from_name + ".\n";
       welcome += "Use the following commands to control your outputs.\n\n";
-      welcome += "/led_on to turn GPIO ON \n";
-      welcome += "/led_off to turn GPIO OFF \n";
-      welcome += "/state to request current GPIO state \n";
+      welcome += "/led_on to turn LED ON \n";
+      welcome += "/led_off to turn LED OFF \n";
+      welcome += "/relay_on to turn RELAY ON \n";
+      welcome += "/relay_off to turn RELAY OFF \n";
+      welcome += "/state to request current status \n";
       bot.sendMessage(chat_id, welcome, "");
     }
 
@@ -81,13 +86,23 @@ void handleNewMessages(int numNewMessages) {
       digitalWrite(ledPin, ledState);
     }
     
+    if (text == "/relay_on") {
+      bot.sendMessage(chat_id, "Relay state set to ON", "");
+      relayState = HIGH;
+      digitalWrite(relayPin, relayState);
+    }
+    
+    if (text == "/relay_off") {
+      bot.sendMessage(chat_id, "Relay state set to OFF", "");
+      relayState = LOW;
+      digitalWrite(relayPin, relayState);
+    }
+    
     if (text == "/state") {
-      if (digitalRead(ledPin)){
-        bot.sendMessage(chat_id, "LED is ON", "");
-      }
-      else{
-        bot.sendMessage(chat_id, "LED is OFF", "");
-      }
+      String status = "Status:\n";
+      status += "LED: " + String(digitalRead(ledPin) ? "ON" : "OFF") + "\n";
+      status += "Relay: " + String(digitalRead(relayPin) ? "ON" : "OFF");
+      bot.sendMessage(chat_id, status, "");
     }
   }
 }
@@ -102,6 +117,9 @@ void setup() {
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, ledState);
+  
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, relayState);
   
   // Connect to Wi-Fi
   WiFi.mode(WIFI_STA);
