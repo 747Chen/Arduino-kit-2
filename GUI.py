@@ -183,6 +183,12 @@ def read_from_esp32_serial(port, baudrate):
 
             # 使用正则提取所有数字，包括浮点数
             numbers = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", line)
+            # 新增：检测模式 (简单字符串匹配即可)
+            current_mode = "UNKNOWN"
+            if "AUTO" in line:
+                current_mode = "AUTO"
+            elif "MANUAL" in line:
+                current_mode = "MANUAL"
 
             if len(numbers) >= 2:
                 temp_val = float(numbers[0])
@@ -191,6 +197,7 @@ def read_from_esp32_serial(port, baudrate):
                 return {
                     "temperature": temp_val,
                     "current": irms_val,
+                    "mode": current_mode,  # 把模式也传出去
                     "timestamp": datetime.now(),
                     "source": "serial"
                 }
@@ -207,6 +214,11 @@ col1, col2 = st.columns([3, 1])
 
 with col1:
     st.markdown("### Temperature Monitoring")
+    mode_status = st.session_state.latest_data.get('mode', 'N/A') if 'latest_data' in st.session_state else "WAITING"
+    if mode_status == "AUTO":
+        st.info(f"System Mode: AUTOMATIC (Controlled by Temp)")
+    elif mode_status == "MANUAL":
+        st.warning(f"System Mode: MANUAL OVERRIDE (Controlled by Telegram)")
 
     if st.session_state.temperature_data:
         current_temp = st.session_state.temperature_data[-1]
