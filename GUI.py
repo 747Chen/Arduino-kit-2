@@ -1,4 +1,4 @@
-# esp32_monitor.py
+# streamlit run GUI.py
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
@@ -6,7 +6,6 @@ import random
 from datetime import datetime
 import time
 import serial
-import threading
 import queue
 import regex as re
 
@@ -92,6 +91,8 @@ if 'temperature_data' not in st.session_state:
     st.session_state.last_update = datetime.now()
     st.session_state.data_queue = queue.Queue()
     st.session_state.serial_connected = False
+    st.session_state.current_mode = "WAITING"  # 新增：保存当前模式
+    st.session_state.serial_conn = None  # 新增：保存串口连接
 
 # 标题
 st.markdown('<h1 class="main-header">ESP32 Temperature Monitoring System</h1>', unsafe_allow_html=True)
@@ -100,18 +101,31 @@ st.markdown('<h1 class="main-header">ESP32 Temperature Monitoring System</h1>', 
 with st.sidebar:
     st.markdown("### System Settings")
 
-    # 串口设置（模拟）
+    # 串口设置
     st.markdown("#### Serial Connection")
     com_port = st.selectbox("COM Port", ["COM3", "COM4", "COM5", "/dev/ttyUSB0", "/dev/ttyACM0"])
     baud_rate = st.selectbox("Baud Rate", [9600, 115200, 57600, 38400], index=1)
 
-    if st.button("Connect ESP32", type="primary", use_container_width=True):
-        st.session_state.serial_connected = True
-        st.success("Connected to ESP32")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Connect ESP32", type="primary", use_container_width=True):
+            try:
+                if st.session_state.serial_conn and st.session_state.serial_conn.is_open:
+                    st.session_state.serial_conn.close()
+                st.session_state.serial_conn = serial.Serial(com_port, baud_rate, timeout=1)
+                time.sleep(2)  # 等待初始化
+                st.session_state.serial_connected = True
+                st.success(f"Connected to {com_port} at {baud_rate} baud")
+            except Exception as e:
+                st.error(f"Connection failed: {str(e)}")
+                st.session_state.serial_connected = False
 
-    if st.button("Disconnect", use_container_width=True):
-        st.session_state.serial_connected = False
-        st.warning("Disconnected")
+    with col2:
+        if st.button("Disconnect", use_container_width=True):
+            if st.session_state.serial_conn and st.session_state.serial_conn.is_open:
+                st.session_state.serial_conn.close()
+            st.session_state.serial_connected = False
+            st.warning("Disconnected")
 
     st.markdown("---")
 
@@ -138,22 +152,28 @@ with st.sidebar:
         <span class="status-dot connected"></span> Data Update: every 2s<br>
         <span class="status-dot connected"></span> Sensor Update: every 5s<br>
         <span class="status-dot connected"></span> Data Points: {len(st.session_state.temperature_data)}<br>
-        <span class="status-dot connected"></span> Last Update: {st.session_state.last_update.strftime('%H:%M:%S')}
+        <span class="status-dot connected"></span> Last Update: {st.session_state.last_update.strftime('%H:%M:%S')}<br>
+        <span class="status-dot connected"></span> Mode: {st.session_state.current_mode}
     </div>
     """, unsafe_allow_html=True)
 
 
 # 模拟ESP32数据读取（在实际使用中替换为真正的串口读取）
 def read_from_esp32_simulation():
-    """模拟从ESP32读取数据 - 替换为你的实际读取代码"""
+    """模拟从ESP32读取数据"""
     try:
-        base_temp = 25 + 3 * random.uniform(-1, 1)
-        time_factor = time.time() * 0.1
-        temp = base_temp + 2 * random.uniform(-0.5, 0.5) + 1.5 * random.gauss(0, 0.3)
-        current = 0.5 + 0.3 * random.uniform(-1, 1) + 0.1 * random.gauss(0, 0.1)
+        base_temp = 0
+        temp = 0
+        current = 0
+
+        # 模拟模式切换
+        current_time = time.time()
+        mode = "AUTO" if int(current_time) % 10 < 5 else "MANUAL"
+
         return {
             "temperature": round(temp, 2),
             "current": round(current, 5),
+            "mode": mode,
             "timestamp": datetime.now(),
             "source": "simulation"
         }
@@ -161,17 +181,15 @@ def read_from_esp32_simulation():
         print(f"Simulation Error: {e}")
         return None
 
-
 # 真正的ESP32数据读取函数
-def read_from_esp32_serial(port, baudrate):
+def read_from_esp32_serial():
     """
     从ESP32串口读取真实数据
     解析格式:  Temp: 8.86 °C | Irms: 0.00000
     """
     try:
-        if 'serial_conn' not in st.session_state:
-            st.session_state.serial_conn = serial.Serial(port, baudrate, timeout=1)
-            time.sleep(2)  # 等待Arduino初始化
+        if not st.session_state.serial_conn or not st.session_state.serial_conn.is_open:
+            return None
 
         ser = st.session_state.serial_conn
 
@@ -181,13 +199,23 @@ def read_from_esp32_serial(port, baudrate):
             if not line:
                 return None
 
+            # 新增：过滤掉不需要的行
+            # 忽略纯数字行（如"1"）和处理消息的标识行
+            if (line.isdigit() or
+                    "handleNewMessages" in line or
+                    "/state" in line or
+                    len(line) < 5):  # 忽略过短的行
+                print(f"Ignoring line: {line}")  # 调试信息
+                return None
+
             # 使用正则提取所有数字，包括浮点数
             numbers = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", line)
-            # 新增：检测模式 (简单字符串匹配即可)
+
+            # 检测模式
             current_mode = "UNKNOWN"
-            if "AUTO" in line:
+            if "AUTO" in line.upper():
                 current_mode = "AUTO"
-            elif "MANUAL" in line:
+            elif "MANUAL" in line.upper():
                 current_mode = "MANUAL"
 
             if len(numbers) >= 2:
@@ -197,10 +225,27 @@ def read_from_esp32_serial(port, baudrate):
                 return {
                     "temperature": temp_val,
                     "current": irms_val,
-                    "mode": current_mode,  # 把模式也传出去
+                    "mode": current_mode,
                     "timestamp": datetime.now(),
                     "source": "serial"
                 }
+            elif len(numbers) >= 1:
+                # 如果只有一个数字，检查是否是温度格式
+                temp_val = float(numbers[0])
+
+                # 额外检查：确保这真的是温度数据（检查是否有"Temp"或"°C"标识）
+                if "Temp" in line or "°C" in line:
+                    # 验证温度值是否合理
+                    if temp_val >= -40 and temp_val <= 100:
+                        return {
+                            "temperature": temp_val,
+                            "current": 0.0,
+                            "mode": current_mode,
+                            "timestamp": datetime.now(),
+                            "source": "serial"
+                        }
+                else:
+                    return None
 
         return None
 
@@ -208,17 +253,21 @@ def read_from_esp32_serial(port, baudrate):
         print(f"Serial Read Error: {e}")
         return None
 
-
 # 主显示区域
 col1, col2 = st.columns([3, 1])
 
 with col1:
     st.markdown("### Temperature Monitoring")
-    mode_status = st.session_state.latest_data.get('mode', 'N/A') if 'latest_data' in st.session_state else "WAITING"
-    if mode_status == "AUTO":
+
+    # 显示模式状态
+    if st.session_state.current_mode == "AUTO":
         st.info(f"System Mode: AUTOMATIC (Controlled by Temp)")
-    elif mode_status == "MANUAL":
+    elif st.session_state.current_mode == "MANUAL":
         st.warning(f"System Mode: MANUAL OVERRIDE (Controlled by Telegram)")
+    elif st.session_state.current_mode == "UNKNOWN":
+        st.info("System Mode: Unknown")
+    else:
+        st.info("Waiting for mode data...")
 
     if st.session_state.temperature_data:
         current_temp = st.session_state.temperature_data[-1]
@@ -236,7 +285,7 @@ with col1:
         st.markdown(f"""
         <div style="{card_style} border-radius: 15px; padding: 30px; color: white; text-align: center;">
             <div style="font-size: 1.2rem; margin-bottom: 10px;">Current Temperature</div>
-            <div style="font-size: 4rem; font-weight: bold;">{current_temp}°C</div>
+            <div style="font-size: 4rem; font-weight: bold;">{current_temp:.2f}°C</div>
             <div style="font-size: 1rem; margin-top: 15px;">
                 {status_text}
             </div>
@@ -358,6 +407,7 @@ if st.session_state.timestamps:
 
     df = pd.DataFrame(data)
 
+
     def highlight_temp(row):
         if row['Temperature (°C)'] >= temp_danger:
             return ['background-color: #ffebee; color: #c62828; font-weight: bold'] * 3
@@ -365,6 +415,7 @@ if st.session_state.timestamps:
             return ['background-color: #fff3e0; color: #ef6c00'] * 3
         else:
             return [''] * 3
+
 
     st.dataframe(
         df.style.apply(highlight_temp, axis=1),
@@ -395,17 +446,16 @@ if st.session_state.timestamps:
             st.session_state.temperature_data.clear()
             st.session_state.current_data.clear()
             st.session_state.timestamps.clear()
+            st.session_state.current_mode = "WAITING"
             st.rerun()
 else:
     st.info("Waiting for ESP32 sensor data...")
 
-# 数据更新逻辑
-current_time = datetime.now()
-time_diff = (current_time - st.session_state.last_update).total_seconds()
 
-if time_diff >= 2:
+# 数据更新逻辑 - 每次页面加载都会执行
+def update_data():
     if st.session_state.serial_connected:
-        new_data = read_from_esp32_serial(port=com_port, baudrate=baud_rate)
+        new_data = read_from_esp32_serial()
     else:
         new_data = read_from_esp32_simulation()
 
@@ -413,13 +463,18 @@ if time_diff >= 2:
         st.session_state.temperature_data.append(new_data['temperature'])
         st.session_state.current_data.append(new_data['current'])
         st.session_state.timestamps.append(new_data['timestamp'])
+        st.session_state.current_mode = new_data.get('mode', st.session_state.current_mode)
 
         if len(st.session_state.temperature_data) > data_points:
             st.session_state.temperature_data.pop(0)
             st.session_state.current_data.pop(0)
             st.session_state.timestamps.pop(0)
 
-        st.session_state.last_update = current_time
+        st.session_state.last_update = datetime.now()
+
+
+# 执行数据更新
+update_data()
 
 # 底部状态栏
 st.markdown("---")
@@ -427,7 +482,11 @@ col1, col2, col3 = st.columns([1, 1, 1])
 
 with col1:
     if st.session_state.serial_connected:
-        st.success("ESP32 Connected")
+        if st.session_state.serial_conn and st.session_state.serial_conn.is_open:
+            st.success(f"ESP32 Connected to {com_port}")
+        else:
+            st.error("Serial connection lost")
+            st.session_state.serial_connected = False
     else:
         st.warning("ESP32 Not Connected (Simulation Mode)")
 
@@ -435,7 +494,18 @@ with col2:
     st.markdown(f"**Update Time:** {st.session_state.last_update.strftime('%H:%M:%S')}")
 
 with col3:
+    # 添加自动刷新开关
+    auto_refresh = st.toggle("Auto Refresh (5s)", value=True, key="auto_refresh")
+
     if st.button("Manual Refresh", use_container_width=True):
+        update_data()
+        st.rerun()
+
+    # 显示自动刷新状态
+    if auto_refresh:
+        st.caption("Auto refresh enabled")
+        # 使用Streamlit的自动刷新机制
+        time.sleep(5)
         st.rerun()
 
 # 数据导出
@@ -468,10 +538,11 @@ else:
     st.info("No data available for export.")
 
 # 最后的状态信息
-st.markdown("""
+st.markdown(f"""
 <div style="text-align: center; margin-top: 20px; padding: 10px; background-color: #396453; border-radius: 5px;">
     <small>ESP32 Temperature Monitoring System | Sensor Update: every 5s | UI Refresh: every 2s</small><br>
-    <small>Data Format: Temp: XX.XX °C | Irms: X.XXXXX</small>
+    <small>Data Format: Temp: XX.XX °C | Irms: X.XXXXX</small><br>
+    <small>Current Mode: {st.session_state.current_mode} | Connection: {'Serial' if st.session_state.serial_connected else 'Simulation'}</small>
 </div>
 """, unsafe_allow_html=True)
 
