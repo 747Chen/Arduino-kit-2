@@ -42,7 +42,7 @@ const int ledPin = 9;
 bool ledState = LOW;
 
 const int relayPin = 13;
-bool relayState = LOW;
+bool relayState = HIGH;
 
 // Handle what happens when you receive new messages
 void handleNewMessages(int numNewMessages) {
@@ -66,42 +66,32 @@ void handleNewMessages(int numNewMessages) {
     if (text == "/start") {
       String welcome = "Welcome, " + from_name + ".\n";
       welcome += "Use the following commands to control your outputs.\n\n";
-      welcome += "/led_on to turn LED ON \n";
-      welcome += "/led_off to turn LED OFF \n";
       welcome += "/relay_on to turn RELAY ON \n";
       welcome += "/relay_off to turn RELAY OFF \n";
       welcome += "/state to request current status \n";
       bot.sendMessage(chat_id, welcome, "");
     }
-
-    if (text == "/led_on") {
-      bot.sendMessage(chat_id, "LED state set to ON", "");
-      ledState = HIGH;
-      digitalWrite(ledPin, ledState);
-    }
     
-    if (text == "/led_off") {
-      bot.sendMessage(chat_id, "LED state set to OFF", "");
+    if (text == "/relay_off") {
+      bot.sendMessage(chat_id, "Relay state set to Off", "");
+      relayState = HIGH;
+      digitalWrite(relayPin, relayState);
       ledState = LOW;
       digitalWrite(ledPin, ledState);
     }
     
     if (text == "/relay_on") {
-      bot.sendMessage(chat_id, "Relay state set to ON", "");
-      relayState = HIGH;
-      digitalWrite(relayPin, relayState);
-    }
-    
-    if (text == "/relay_off") {
-      bot.sendMessage(chat_id, "Relay state set to OFF", "");
+      bot.sendMessage(chat_id, "Relay state set to On", "");
       relayState = LOW;
       digitalWrite(relayPin, relayState);
+      ledState = HIGH;
+      digitalWrite(ledPin, ledState);
     }
     
     if (text == "/state") {
       String status = "Status:\n";
       status += "LED: " + String(digitalRead(ledPin) ? "ON" : "OFF") + "\n";
-      status += "Relay: " + String(digitalRead(relayPin) ? "ON" : "OFF");
+      status += "Relay: " + String(digitalRead(relayPin) ? "OFF" : "ON");
       bot.sendMessage(chat_id, status, "");
     }
   }
