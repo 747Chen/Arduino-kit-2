@@ -1,5 +1,7 @@
 # 口令：streamlit run GUI.py
-# TODO: ++data auto storage,++electricity price calculation, ++API get electricity price, ++auto temp alarm
+# TODO: ++data auto storage
+# TODO: ++electricity price calculation, ++API get electricity price
+# TODO: ++auto temp alarm
 # 接线指南：
 # 16bit接IIC， 电流传感器接16bit的A1蓝色接口
 # LED指示灯接D5绿色和黑色口， relay接D7
