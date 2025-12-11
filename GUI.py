@@ -1,4 +1,9 @@
-# streamlit run GUI.py
+# 口令：streamlit run GUI.py
+# TODO: ++data auto storage,++electricity price calculation, ++API get electricity price, ++auto temp alarm
+# 接线指南：
+# 16bit接IIC， 电流传感器接16bit的A1蓝色接口
+# LED指示灯接D5绿色和黑色口， relay接D7
+# 温度传感器接A3口
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
