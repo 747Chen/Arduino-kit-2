@@ -54,6 +54,10 @@ bool temperatureControlActive = false;
 const int TempPin = A3;     // LM35 V4 analog output
 float Tmin = 20.0;
 float Tmax = 25.0;
+float Talarm = 35.0;
+bool alarmSent = false;
+unsigned long lastAlarmCheck = 0;
+const unsigned long alarmCheckInterval = 5000; // Check alarm every 5 seconds
 
 // Current sensor variables
 const int SensorPin = A1, RefPin = A2;
@@ -151,6 +155,20 @@ void temperatureControl() {
     Serial.print("Irms: ");
     Serial.println(Irms_filt, 5);
 
+    // Temperature alarm check
+    if (tempC >= Talarm && !alarmSent) {
+      String alarmMsg = "⚠️ TEMPERATURE ALARM! ⚠️\n";
+      alarmMsg += "Current Temperature: " + String(tempC, 2) + " °C\n";
+      alarmMsg += "Alarm Threshold: " + String(Talarm, 1) + " °C\n";
+      alarmMsg += "Immediate attention required!";
+      bot.sendMessage(CHAT_ID, alarmMsg, "");
+      alarmSent = true;
+      Serial.println("ALARM: Temperature threshold exceeded!");
+    } else if (tempC < (Talarm - 2.0)) {
+      // Reset alarm when temp drops 2°C below threshold (hysteresis)
+      alarmSent = false;
+    }
+
     // Temperature control logic (low trigger)
     if (tempC < Tmin) {
       digitalWrite(relayPin, LOW);   // Heater ON
@@ -186,6 +204,7 @@ void handleNewMessages(int numNewMessages) {
       welcome += "/relay_off to turn RELAY OFF (disables temp control)\n";
       welcome += "/state to request current status \n";
       welcome += "/temp to get current temperature \n";
+      welcome += "\nAlarm will trigger at " + String(Talarm, 1) + " °C\n";
       bot.sendMessage(chat_id, welcome, "");
     }
     
@@ -223,7 +242,11 @@ void handleNewMessages(int numNewMessages) {
     if (text == "/temp") {
       float tempC = read_temperature();
       String tempMsg = "Current Temperature: " + String(tempC, 2) + " °C\n";
-      tempMsg += "Target Range: " + String(Tmin, 1) + " - " + String(Tmax, 1) + " °C";
+      tempMsg += "Target Range: " + String(Tmin, 1) + " - " + String(Tmax, 1) + " °C\n";
+      tempMsg += "Alarm Threshold: " + String(Talarm, 1) + " °C";
+      if (tempC >= Talarm) {
+        tempMsg += "\n⚠️ ALARM ACTIVE!";
+      }
       bot.sendMessage(chat_id, tempMsg, "");
     }
   }
