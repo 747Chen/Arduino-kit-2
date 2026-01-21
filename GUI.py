@@ -1,7 +1,6 @@
 # 口令：streamlit run GUI.py
 # TODO: ++data auto storage
 # TODO: ++electricity price calculation, ++API get electricity price
-# TODO: ++auto temp alarm
 # 接线指南：
 # 16bit接IIC， 电流传感器接16bit的A1蓝色接口
 # LED指示灯接D5绿色和黑色口， relay接D7
@@ -512,7 +511,7 @@ with col3:
     if auto_refresh:
         st.caption("Auto refresh enabled")
         # 使用Streamlit的自动刷新机制
-        time.sleep(5)
+        time.sleep(2)
         st.rerun()
 
 # 数据导出
