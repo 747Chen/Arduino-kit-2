@@ -1,0 +1,74 @@
+digraph Data_Flow_Diagram {
+	graph [bgcolor=transparent fontname=Arial fontsize=10 label="ESP32数据流与GUI交互图" labelloc=t rankdir=LR]
+	node [fontname=Arial fontsize=9 shape=box style=filled]
+	subgraph cluster_esp32 {
+		color="#16A085" fillcolor="#E8F6F3" label="ESP32 Microcontroller" style=filled
+		SENSORS [label="传感器输入
+- SCT-013电流
+- LM35温度" fillcolor="#A3E4D7" shape=ellipse]
+		ADC_PROCESS [label="ADC处理
+- ADS1115 (16位)
+- ESP32 ADC (12位)" shape=box]
+		DATA_PROC [label="数据处理
+- 电流RMS计算
+- 温度转换
+- 滑动平均滤波" fillcolor="#76D7C4" shape=box]
+		CONTROL_LOGIC [label="控制逻辑
+- 温度比较
+- 继电器控制
+- 报警检查" fillcolor="#F7DC6F" shape=diamond]
+		SERIAL_OUTPUT [label="串口格式化
+\"Temp: XX.XX °C | Irms: X.XXXXX\"" shape=box]
+		TELEGRAM_BOT [label="Telegram Bot
+- 消息接收
+- 命令处理
+- 警报发送" fillcolor="#85C1E9" shape=box3d]
+	}
+	subgraph cluster_gui {
+		color="#8E44AD" fillcolor="#F4ECF7" label="Python GUI Application" style=filled
+		SERIAL_READ [label="串口数据读取
+- 连接ESP32
+- 解析数据格式" fillcolor="#D2B4DE" shape=box]
+		DATA_STORE [label="数据存储
+- 温度/电流数组
+- 时间戳记录
+- 会话状态" fillcolor="#BB8FCE" shape=cylinder]
+		PRICE_FETCH [label="电价API获取
+- REE西班牙API
+- 缓存机制
+- 后备方案" shape=parallelogram]
+		COST_CALC [label="成本计算
+- 实时功率计算
+- 累计能耗
+- 费用估算" fillcolor="#A569BD" shape=box]
+		VIZ_ENGINE [label="可视化引擎
+- Plotly图表
+- 实时更新
+- 交互式界面" fillcolor="#8E44AD" shape=box3d]
+		USER_UI [label="用户界面
+- Streamlit Web App
+- 控制面板
+- 数据导出" fillcolor="#7D3C98" shape=component]
+	}
+	SENSORS -> ADC_PROCESS
+	ADC_PROCESS -> DATA_PROC
+	DATA_PROC -> CONTROL_LOGIC
+	CONTROL_LOGIC -> SERIAL_OUTPUT
+	CONTROL_LOGIC -> TELEGRAM_BOT
+	SERIAL_OUTPUT -> SERIAL_READ [label="115200 baud
+每5秒数据"]
+	SERIAL_READ -> DATA_STORE
+	DATA_STORE -> PRICE_FETCH
+	PRICE_FETCH -> COST_CALC
+	COST_CALC -> VIZ_ENGINE
+	VIZ_ENGINE -> USER_UI
+	DATA_STORE -> VIZ_ENGINE
+	USER_UI -> TELEGRAM_BOT [label="用户指令
+/命令" style=dashed]
+	DATA_FORMAT [label="数据格式说明：
+• 温度：-40°C to 100°C
+• 电流：0.00000 to 15.00000 A
+• 采样率：电流20ms，温度5s
+• 控制模式：AUTO/MANUAL
+• 警报阈值：35°C" fillcolor="#FCF3CF" shape=note]
+}

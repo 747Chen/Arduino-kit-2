@@ -1,0 +1,136 @@
+digraph ESP32_Temperature_Control_System {
+	graph [bgcolor=transparent fontcolor="#2C3E50" fontname=Arial fontsize=12 label="ESP32 Temperature Monitoring & Control System
+(2026-01-16)" labeljust=c labelloc=t rankdir=TB]
+	node [color="#2C3E50" fillcolor=lightblue fontname=Arial fontsize=10 shape=box style="rounded,filled"]
+	edge [color="#34495E" fontname=Arial fontsize=9]
+	START [label="系统启动" fillcolor=lightgreen shape=circle style="filled,bold"]
+	INIT [label="硬件初始化
+- WiFi配置
+- I2C初始化
+- GPIO设置
+- 串口配置" fillcolor="#AED6F1" shape=box3d]
+	WIFI_CONNECT [label="WiFi连接
+SSID: ard-citcea" fillcolor="#85C1E9" shape=parallelogram]
+	TELEGRAM_INIT [label="Telegram Bot初始化
+- Token验证
+- 安全证书配置" fillcolor="#85C1E9" shape=parallelogram]
+	MAIN_LOOP [label="主循环启动
+(1ms周期)" fillcolor="#F9E79F" shape=diamond]
+	subgraph cluster_current {
+		color="#1ABC9C" fillcolor="#E8F8F5" label="电流测量链路 (20ms周期)" style=filled
+		CURRENT_ADC [label="ADS1115 ADC采样
+- I2C读取
+- 860 SPS速率" shape=box]
+		DC_REMOVE [label="去除直流偏置
+减去1.65V基准" shape=ellipse]
+		CURRENT_CALC [label="电流计算
+I_inst = V × 30 A/V" shape=box]
+		RMS_ACCUM [label="RMS累加
+quadratic_sum_rms += I_inst² × Δt" shape=box]
+		RMS_CALC [label="RMS计算 (每5秒)
+Irms = √(50 × sum)" shape=box]
+		NOISE_FILTER [label="噪声过滤
+Irms < 0.1A → 清零" fillcolor="#FAD7A0" shape=diamond]
+		MOVING_AVG [label="滑动平均滤波
+250个周期平均" shape=box]
+		CURRENT_OUTPUT [label="输出滤波电流
+I_rms_filt" fillcolor="#A9DFBF" shape=box]
+		CURRENT_ADC -> DC_REMOVE
+		DC_REMOVE -> CURRENT_CALC
+		CURRENT_CALC -> RMS_ACCUM
+		RMS_ACCUM -> RMS_CALC
+		RMS_CALC -> NOISE_FILTER
+		NOISE_FILTER -> MOVING_AVG
+		MOVING_AVG -> CURRENT_OUTPUT
+	}
+	subgraph cluster_temp {
+		color="#E74C3C" fillcolor="#FDEDEC" label="温度测量链路 (5秒周期)" style=filled
+		TEMP_ADC [label="LM35 V4 ADC采样
+- ESP32 ADC3(IO35)
+- 12位分辨率" shape=box]
+		VOLT_CONV [label="电压转换
+V = (raw/4095) × 3.3V" shape=ellipse]
+		TEMP_CALC [label="温度计算
+TempC = V × 100°C/V
++1°C校准可选" shape=box]
+		TEMP_OUTPUT [label="输出温度值" fillcolor="#F5B7B1" shape=box]
+		TEMP_ADC -> VOLT_CONV
+		VOLT_CONV -> TEMP_CALC
+		TEMP_CALC -> TEMP_OUTPUT
+	}
+	subgraph cluster_control {
+		color="#F39C12" fillcolor="#FEF9E7" label="温度控制逻辑" style=filled
+		CONTROL_CHECK [label="控制模式检查
+AUTO/MANUAL" fillcolor="#FAD7A0" shape=diamond]
+		TEMP_COMPARE [label="温度比较
+Tmin=20°C, Tmax=25°C" shape=diamond]
+		RELAY_ON [label="继电器闭合
+加热器通电
+LED ON" fillcolor="#82E0AA" shape=box]
+		RELAY_OFF [label="继电器断开
+加热器断电
+LED OFF" fillcolor="#F1948A" shape=box]
+		ALARM_CHECK [label="报警检查
+Talarm=35°C" fillcolor="#F5B7B1" shape=diamond]
+		SEND_ALARM [label="发送Telegram警报
+设置alarmSent标志" fillcolor="#F1948A" shape=box]
+		ALARM_RESET [label="报警复位
+(Temp < Talarm-2°C)" shape=box]
+		CONTROL_CHECK -> TEMP_COMPARE
+		TEMP_COMPARE -> RELAY_ON
+		TEMP_COMPARE -> RELAY_OFF
+		TEMP_COMPARE -> ALARM_CHECK
+		ALARM_CHECK -> SEND_ALARM
+		ALARM_CHECK -> ALARM_RESET
+	}
+	subgraph cluster_comm {
+		color="#3498DB" fillcolor="#EAF2F8" label="通信与数据输出" style=filled
+		SERIAL_OUT [label="串口数据输出
+格式: \"Temp: XX.XX °C | Irms: X.XXXXX\"" shape=box]
+		TELEGRAM_POLL [label="Telegram消息轮询
+1秒间隔" shape=parallelogram]
+		HANDLE_CMD [label="处理Telegram命令
+/start, /relay_on, /relay_off, /state, /temp" shape=box]
+		GUI_RECEIVE [label="Python GUI接收数据
+Streamlit可视化" shape=box]
+		PRICE_API [label="电价API查询
+REE西班牙电价" shape=box]
+		COST_CALC [label="用电成本计算
+基于实时电价" shape=box]
+		USER_INTERFACE [label="用户界面
+- 实时图表
+- 数据表格
+- 控制面板" fillcolor="#D6EAF8" shape=box3d]
+		SERIAL_OUT -> GUI_RECEIVE
+		GUI_RECEIVE -> PRICE_API
+		PRICE_API -> COST_CALC
+		COST_CALC -> USER_INTERFACE
+	}
+	START -> INIT
+	INIT -> WIFI_CONNECT
+	WIFI_CONNECT -> TELEGRAM_INIT
+	TELEGRAM_INIT -> MAIN_LOOP
+	MAIN_LOOP -> CURRENT_ADC
+	MAIN_LOOP -> TEMP_ADC
+	CURRENT_OUTPUT -> CONTROL_CHECK
+	TEMP_OUTPUT -> CONTROL_CHECK
+	RELAY_ON -> SERIAL_OUT
+	RELAY_OFF -> SERIAL_OUT
+	SEND_ALARM -> SERIAL_OUT
+	TELEGRAM_POLL -> HANDLE_CMD
+	HANDLE_CMD -> CONTROL_CHECK
+	SERIAL_OUT -> MAIN_LOOP [label="循环返回" color="#7D3C98" style=dashed]
+	USER_INTERFACE -> HANDLE_CMD [label="用户指令" color="#7D3C98" style=dashed]
+	fontcolor="#2C3E50" fontsize=10 label="ESP32 Temperature Monitoring & Control System
+=============================================
+
+系统特点：
+• 双传感链路并行采样（电流/温度）
+• 20ms电流周期测量 + 5秒温度采样
+• 迟滞温度控制（20-25°C范围）
+• Telegram远程控制与警报
+• 实时数据可视化与电价计算
+• 噪声过滤与滑动平均滤波
+
+生成时间：2026-01-16 14:06:06"
+}
