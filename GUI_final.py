@@ -27,6 +27,9 @@ from pathlib import Path
 PRICE_CACHE_DIR = Path("./price_cache")
 PRICE_CACHE_DIR.mkdir(exist_ok=True)
 
+PRICE_CACHE_KEY = "ree_price_cache"
+PRICE_LAST_FETCH_KEY = "ree_last_fetch_time"
+
 # 页面配置
 st.set_page_config(
     page_title="ESP32 Temperature Monitoring System",
@@ -178,23 +181,36 @@ with st.sidebar:
 
 # 模拟ESP32数据读取（在实际使用中替换为真正的串口读取）
 def read_from_esp32_simulation():
-    """模拟从ESP32读取数据"""
-    try:
-        base_temp = 0
-        temp = 1
-        current = 1
+    """
+    Simulate ESP32 data:
+    - Current ramps linearly from 0A to 10A over 15 seconds
+    - Then instantly drops back to 0A and repeats
+    """
 
-        # 模拟模式切换
-        current_time = time.time()
-        mode = "AUTO" if int(current_time) % 10 < 5 else "MANUAL"
+    try:
+        period = 15.0          # seconds
+        max_current = 10.0     # A
+
+        now = time.time()
+        phase = now % period  # [0, 15)
+
+        # 线性爬升：0 → 10 A
+        current = (phase / period) * max_current
+
+        # 可选：模拟一个非常轻微的温度相关性
+        temperature = 25.0 + 0.8 * current
+
+        # 模拟模式切换（保持你原来的逻辑）
+        mode = "AUTO" if int(now) % 10 < 5 else "MANUAL"
 
         return {
-            "temperature": round(temp, 2),
-            "current": round(current, 2),
+            "temperature": round(temperature, 2),
+            "current": round(current, 4),   # 内部精度高一点，显示层再格式化
             "mode": mode,
             "timestamp": datetime.now(),
             "source": "simulation"
         }
+
     except Exception as e:
         print(f"Simulation Error: {e}")
         return None
@@ -273,158 +289,175 @@ def read_from_esp32_serial():
 
 
 # 电价获取和计算相关函数
-def get_ree_price(start_date=None, end_date=None, include_pvpc=False):
+def get_ree_price(start_date=None, end_date=None):
     """
-    从REE API获取西班牙电价数据
+    Ultra-robust REE spot price fetcher
+    Handles null / missing fields safely
     """
-    # API配置
-    endpoint = 'https://apidatos.ree.es'
-    get_archives = '/en/datos/mercados/precios-mercados-tiempo-real'
+
+    endpoint = "https://apidatos.ree.es"
+    url = "/en/datos/mercados/precios-mercados-tiempo-real"
 
     headers = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Host': 'apidatos.ree.es'
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
 
-    # 设置默认时间范围
-    if start_date is None:
-        spain_tz = pytz.timezone('Europe/Madrid')
-        start_date = datetime.now(spain_tz)
-
-    if end_date is None:
-        end_date = start_date + timedelta(hours=24)
-
-    # 格式化时间字符串
-    start_date_str = start_date.strftime('%Y-%m-%dT%H:%M')
-    end_date_str = end_date.strftime('%Y-%m-%dT%H:%M')
+    start = datetime.now()
+    end = start + timedelta(hours=24)
 
     params = {
-        'start_date': start_date_str,
-        'end_date': end_date_str,
-        'time_trunc': 'hour'
+        "start_date": start.strftime("%Y-%m-%dT%H:%M"),
+        "end_date": end.strftime("%Y-%m-%dT%H:%M"),
+        "time_trunc": "hour"
     }
 
     try:
-        # 发送API请求
         response = requests.get(
-            endpoint + get_archives,
+            endpoint + url,
             headers=headers,
             params=params,
             timeout=10
         )
-
         response.raise_for_status()
-
-        # 解析JSON数据
         data_json = response.json()
 
-        # 验证数据结构
-        if 'included' not in data_json or len(data_json['included']) < 2:
-            raise ValueError("ERROR: Data structure cannot be read")
+        included = data_json.get("included", [])
+        if not included:
+            raise ValueError("No included blocks in REE response")
 
-        # 提取现货市场价格
-        spot_market_data = None
-        pvpc_data = None
+        spot_block = None
 
-        for item in data_json['included']:
-            item_type = item.get('type', '')
-            if item_type == 'Precio mercado spot (€/MWh)':
-                spot_market_data = item
-            elif item_type == 'PVPC (€/MWh)':
-                pvpc_data = item
+        # ---------- 安全识别 spot market ----------
+        for item in included:
+            attrs = item.get("attributes") or {}
 
-        if spot_market_data is None:
-            raise ValueError("ERROR: No market data found")
+            title = attrs.get("title")
+            description = attrs.get("description")
 
-        # 提取数据
-        spot_values = spot_market_data['attributes']['values']
+            title_str = title.lower() if isinstance(title, str) else ""
+            desc_str = description.lower() if isinstance(description, str) else ""
 
-        # 构建数据列表
-        data_records = []
+            if ("spot" in title_str or "mercado" in title_str or
+                "spot" in desc_str or "mercado" in desc_str):
+                if "values" in attrs:
+                    spot_block = item
+                    break
 
-        for data_point in spot_values:
-            record = {
-                'datetime': datetime.fromisoformat(data_point['datetime'].replace('Z', '+00:00')),
-                'spot_price': data_point['value'],  # €/MWh
-                'spot_price_eur_kwh': data_point['value'] / 1000  # 转换为€/kWh
-            }
+        # ---------- 终极兜底：按官方示例索引 ----------
+        if spot_block is None and len(included) >= 2:
+            spot_block = included[1]
 
-            data_records.append(record)
+        if spot_block is None:
+            raise ValueError("Spot market block not found")
 
-        # 创建DataFrame
-        df = pd.DataFrame(data_records)
-        df = df.sort_values('datetime')
-        df = df.reset_index(drop=True)
+        values = spot_block.get("attributes", {}).get("values", [])
+        if not values:
+            raise ValueError("Spot price values empty")
+
+        records = []
+        for v in values:
+            dt = datetime.fromisoformat(v["datetime"].replace("Z", "+00:00"))
+            price_mwh = float(v["value"])
+
+            records.append({
+                "datetime": dt,
+                "spot_price": price_mwh,
+                "spot_price_eur_kwh": price_mwh / 1000
+            })
+
+        df = (
+            pd.DataFrame(records)
+            .sort_values("datetime")
+            .reset_index(drop=True)
+        )
 
         return df
 
-    except requests.exceptions.RequestException as e:
-        print(f"ERROR: Network connection error: {e}")
-        return pd.DataFrame()
-
-    except ValueError as e:
-        print(f"ERROR: structure error: {e}")
-        return pd.DataFrame()
-
     except Exception as e:
-        print(f"ERROR: Unknown error: {e}")
+        print(f"ERROR: REE price fetch failed: {e}")
         return pd.DataFrame()
+
 
 
 def get_ree_price_with_fallback(start_date=None, end_date=None):
     """
-    获取电价数据，如果API失败则返回恒定电价0.15€/MWh
+    Fetch REE prices at most ONCE per hour.
+    Uses:
+      1. Streamlit session cache
+      2. Disk cache
+      3. Fallback constant price
     """
-    try:
-        # 尝试从缓存读取
-        cache_file = PRICE_CACHE_DIR / f"price_{datetime.now().strftime('%Y%m%d')}.json"
-        if cache_file.exists():
-            with open(cache_file, 'r') as f:
-                cached_data = json.load(f)
-                # 检查缓存是否过期（超过30分钟）
-                cache_time = datetime.fromisoformat(cached_data['timestamp'])
-                if (datetime.now() - cache_time).seconds < 1800:
-                    # 从缓存恢复数据
-                    records = []
-                    for record in cached_data['data']:
-                        # 确保datetime是datetime对象
-                        dt = datetime.fromisoformat(record['datetime'])
-                        records.append({
-                            'datetime': dt,
-                            'spot_price': record['spot_price'],
-                            'spot_price_eur_kwh': record['spot_price'] / 1000
-                        })
-                    df = pd.DataFrame(records)
-                    print(f"Using cached price data from {cache_time}")
-                    return df
 
-        # 从API获取数据
-        api_df = get_ree_price(start_date, end_date)
+    spain_tz = pytz.timezone("Europe/Madrid")
+    now = datetime.now(spain_tz)
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
 
-        if not api_df.empty:
-            # 缓存数据
-            cache_data = {
-                'timestamp': datetime.now().isoformat(),
-                'data': []
-            }
-            for _, row in api_df.iterrows():
-                cache_data['data'].append({
-                    'datetime': row['datetime'].isoformat(),
-                    'spot_price': row['spot_price']
+    last_fetch = st.session_state.get(PRICE_LAST_FETCH_KEY)
+    cached_df = st.session_state.get(PRICE_CACHE_KEY)
+
+    if last_fetch == current_hour and cached_df is not None:
+        return cached_df
+
+    cache_file = PRICE_CACHE_DIR / f"price_{current_hour.strftime('%Y%m%d_%H')}.json"
+
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r") as f:
+                cached = json.load(f)
+
+            records = []
+            for r in cached["data"]:
+                records.append({
+                    "datetime": datetime.fromisoformat(r["datetime"]),
+                    "spot_price": r["spot_price"],
+                    "spot_price_eur_kwh": r["spot_price"] / 1000
                 })
 
-            with open(cache_file, 'w') as f:
-                json.dump(cache_data, f)
+            df = pd.DataFrame(records)
 
-            return api_df
-        else:
-            # API返回空数据，使用后备方案
+            # 写回 session cache
+            st.session_state[PRICE_CACHE_KEY] = df
+            st.session_state[PRICE_LAST_FETCH_KEY] = current_hour
+
+            print(f"Using disk cached REE prices @ {current_hour}")
+            return df
+
+        except Exception as e:
+            print(f"Disk cache corrupted: {e}")
+
+    try:
+        print("Fetching REE prices from API (hourly limit)")
+        df = get_ree_price(start_date, end_date)
+
+        if df.empty:
             raise ValueError("API returned empty data")
 
+        # 写磁盘缓存
+        cache_payload = {
+            "timestamp": current_hour.isoformat(),
+            "data": [
+                {
+                    "datetime": row["datetime"].isoformat(),
+                    "spot_price": row["spot_price"]
+                }
+                for _, row in df.iterrows()
+            ]
+        }
+
+        with open(cache_file, "w") as f:
+            json.dump(cache_payload, f)
+
+        # 写 session cache
+        st.session_state[PRICE_CACHE_KEY] = df
+        st.session_state[PRICE_LAST_FETCH_KEY] = current_hour
+
+        return df
+
     except Exception as e:
-        print(f"电价API获取失败，使用后备方案: {e}")
+        print(f"REE API failed, fallback used: {e}")
         return generate_fallback_price_data(start_date, end_date)
+
 
 
 def generate_fallback_price_data(start_date=None, end_date=None):
@@ -719,21 +752,13 @@ def update_electricity_cost():
         return None
 
 # 主显示区域
-col1, col2, col3 = st.columns([3, 1, 2])
+left_col, right_col = st.columns([3, 2])  # 60% / 40%
 
-with col1:
-    st.markdown("### Temperature Monitoring")
+# ---------- LEFT COLUMN ----------
+with left_col:
+    st.markdown("### Temperature")
 
-    # 显示模式状态
-    if st.session_state.current_mode == "AUTO":
-        st.info(f"System Mode: AUTOMATIC (Controlled by Temp)")
-    elif st.session_state.current_mode == "MANUAL":
-        st.warning(f"System Mode: MANUAL OVERRIDE (Controlled by Telegram)")
-    elif st.session_state.current_mode == "UNKNOWN":
-        st.info("System Mode: Unknown")
-    else:
-        st.info("Waiting for mode data...")
-
+    # ===== Temperature Card =====
     if st.session_state.temperature_data:
         current_temp = st.session_state.temperature_data[-1]
 
@@ -749,22 +774,17 @@ with col1:
 
         st.markdown(f"""
         <div style="{card_style} border-radius: 15px; padding: 30px; color: white; text-align: center;">
-            <div style="font-size: 1.2rem; margin-bottom: 10px;">Current Temperature</div>
+            <div style="font-size: 1.2rem;">Current Temperature</div>
             <div style="font-size: 4rem; font-weight: bold;">{current_temp:.2f}°C</div>
-            <div style="font-size: 1rem; margin-top: 15px;">
-                {status_text}
-            </div>
+            <div style="margin-top: 10px;">{status_text}</div>
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.markdown("""
-        <div class="temp-card" style="text-align: center;">
-            <div style="font-size: 1.2rem;">Waiting for data...</div>
-            <div style="font-size: 3rem; font-weight: bold;">-- °C</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("Waiting for temperature data...")
 
-with col2:
+    st.markdown("<div style='height: 25px;'></div>", unsafe_allow_html=True)
+
+    # ===== Current Card =====
     st.markdown("### Current")
 
     if st.session_state.current_data:
@@ -772,100 +792,67 @@ with col2:
 
         st.markdown(f"""
         <div class="current-card" style="text-align: center;">
-            <div style="font-size: 1rem; margin-bottom: 10px;">RMS Current</div>
-            <div style="font-size: 2.5rem; font-weight: bold;">{current_value:.5f}</div>
-            <div style="font-size: 1rem; margin-top: 10px;">A</div>
-            <div style="font-size: 0.8rem; margin-top: 15px; opacity: 0.8;">
-                {current_value:.3f} A
+            <div style="font-size: 1rem;">RMS Current</div>
+            <div style="font-size: 3rem; font-weight: bold;">
+                {current_value:.2g}
             </div>
+            <div style="font-size: 1rem;">A</div>
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.markdown("""
-        <div class="current-card" style="text-align: center;">
-            <div style="font-size: 1rem;">Waiting for data...</div>
-            <div style="font-size: 2.5rem; font-weight: bold;">--</div>
-            <div style="font-size: 1rem; margin-top: 10px;">A</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("Waiting for current data...")
 
-with col3:
-    st.markdown("### Electricity Cost")
+# ---------- RIGHT COLUMN ----------
+with right_col:
+    st.markdown("### Electricity Price")
 
-    # 获取并显示电价和成本信息
+    # ===== Price Card =====
+    price_data = get_current_hour_price()
+
     cost_data = update_electricity_cost()
 
-    if cost_data:
-        # 更新会话状态
-        st.session_state.electricity_cost_data = {
-            'current_price': cost_data['current_price_eur_kwh'],
-            'total_energy': cost_data['total_energy_kwh'],
-            'total_cost': cost_data['total_cost_eur'],
-            'last_update': datetime.now()
-        }
-
-        # 显示电价卡片
+    if price_data:
         st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
-                    border-radius: 15px; padding: 25px; color: white; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-            <div style="font-size: 1rem; margin-bottom: 10px;">Current Electricity Price</div>
-            <div style="font-size: 2.5rem; font-weight: bold;">{cost_data['current_price_eur_kwh']:.4f}</div>
-            <div style="font-size: 1rem; margin-top: 5px;">€/kWh</div>
-            <div style="font-size: 0.8rem; margin-top: 10px; opacity: 0.8;">
-                ({cost_data['current_price_eur_mwh']:.2f} €/MWh)
+        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                    border-radius: 15px; padding: 25px; color: white; text-align: center;">
+            <div style="font-size: 1rem;">Current Electricity Price</div>
+            <div style="font-size: 2.5rem; font-weight: bold;">
+                {price_data['price_eur_kwh']:.4f}
+            </div>
+            <div>€/kWh</div>
+            <div style="opacity: 0.85; font-size: 0.9rem;">
+                ({price_data['price_eur_mwh']:.2f} €/MWh)
             </div>
         </div>
         """, unsafe_allow_html=True)
+    else:
+        st.info("Waiting for electricity price...")
 
-        # 显示能耗和成本卡片
+    st.markdown("<div style='height: 25px;'></div>", unsafe_allow_html=True)
+
+    # ===== Energy / Cost Card =====
+    if cost_data:
         st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); 
-                    border-radius: 15px; padding: 25px; color: white; margin-top: 20px; 
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        <div style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+                    border-radius: 15px; padding: 25px; color: white;">
             <div style="display: flex; justify-content: space-between;">
                 <div>
-                    <div style="font-size: 0.9rem;">Energy Consumed</div>
-                    <div style="font-size: 1.8rem; font-weight: bold;">{cost_data['total_energy_kwh']:.3f}</div>
-                    <div style="font-size: 0.8rem;">kWh</div>
+                    <div style="font-size: 0.9rem;">Energy</div>
+                    <div style="font-size: 1.6rem; font-weight: bold;">
+                        {cost_data['total_energy_kwh']:.3f} kWh
+                    </div>
                 </div>
                 <div>
-                    <div style="font-size: 0.9rem;">Total Cost</div>
-                    <div style="font-size: 1.8rem; font-weight: bold;">{cost_data['total_cost_eur']:.3f}</div>
-                    <div style="font-size: 0.8rem;">€</div>
+                    <div style="font-size: 0.9rem;">Cost</div>
+                    <div style="font-size: 1.6rem; font-weight: bold;">
+                        {cost_data['total_cost_eur']:.3f} €
+                    </div>
                 </div>
             </div>
-            <div style="font-size: 0.8rem; margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                Current Power: {cost_data['current_power_kw']:.2f} kW<br>
-                Updated: {cost_data['time'].strftime('%H:%M')}
-            </div>
         </div>
         """, unsafe_allow_html=True)
-
-        # 添加重置按钮
-        if st.button("Reset Energy Counter", use_container_width=True, type="secondary"):
-            st.session_state.total_energy_kwh = 0.0
-            st.session_state.electricity_cost_data['total_energy'] = 0.0
-            st.session_state.electricity_cost_data['total_cost'] = 0.0
-            st.rerun()
     else:
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
-                    border-radius: 15px; padding: 25px; color: white; text-align: center;">
-            <div style="font-size: 1rem;">Waiting for electricity price data...</div>
-            <div style="font-size: 2.5rem; font-weight: bold;">--</div>
-            <div style="font-size: 1rem; margin-top: 5px;">€/kWh</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); 
-                    border-radius: 15px; padding: 25px; color: white; margin-top: 20px; 
-                    text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-            <div style="font-size: 1rem;">Waiting for current measurement...</div>
-            <div style="font-size: 1.8rem; font-weight: bold; margin-top: 10px;">-- kWh</div>
-            <div style="font-size: 0.8rem; margin-top: 5px;">Energy Consumed</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("Waiting for current data to calculate cost...")
 
 st.markdown("---")
 
